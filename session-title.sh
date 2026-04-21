@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # claude-terminal-titles — live terminal tab titles for Claude Code
-# Each hook event updates the tab title with what Claude is currently doing.
 
 EVENT="${1:-unknown}"
 STDIN=$(cat)
@@ -9,11 +8,24 @@ TTY_CACHE="/tmp/claude-title-tty"
 STATE_FILE="/tmp/claude-title-state"
 LOOP_PID="/tmp/claude-title-loop-pid"
 
-# Kill previous persistence loop
+# ── Defaults (overridden by ~/.claude/hooks/session-title.conf) ───────────────
+E_READ='📄'   E_EDIT='✏️ '  E_WRITE='💾'  E_BASH='$'
+E_SEARCH='🔍' E_AGENT='⚙'  E_TOOL='🔧'
+
+T_START='▶ Session Start'    T_END='💤 Session End'
+T_PROMPT='💬 Thinking...'    T_DONE='✅ Done'
+T_FAILED='❌ Failed'          T_NOTIF='🔔 Notification'
+T_PERM='⏳ Permission?'       T_COMPACT='🗜 Compacting...'
+T_COMPACTED='✅ Compacted'   T_SUBAGENT='⚙ Subagent...'
+T_SUBAGENT_DONE='⚙ Subagent done'  T_ELICIT='❓ Elicitation'
+
+# shellcheck source=/dev/null
+[ -f "${HOME}/.claude/hooks/session-title.conf" ] && source "${HOME}/.claude/hooks/session-title.conf"
+
+# ── Kill previous persistence loop ────────────────────────────────────────────
 [ -f "$LOOP_PID" ] && kill "$(cat "$LOOP_PID" 2>/dev/null)" 2>/dev/null; true
 
-# Parse tool name + context label from JSON stdin in a single Python call.
-# Tempfile avoids the pipe+heredoc stdin conflict.
+# ── Parse tool + context from JSON stdin ──────────────────────────────────────
 _py=$(mktemp /tmp/ct.XXXXXX.py)
 cat > "$_py" << 'PYEOF'
 import sys, json
@@ -42,51 +54,50 @@ PYEOF
 IFS=$'\t' read -r TOOL CTX < <(printf '%s' "$STDIN" | python3 "$_py" 2>/dev/null || printf '\t')
 rm -f "$_py"
 
+# ── Build title ────────────────────────────────────────────────────────────────
 tool_label() {
   case "$1" in
-    Read)       echo "📄 ${2:-read}" ;;
-    Edit)       echo "✏️  ${2:-edit}" ;;
-    Write)      echo "💾 ${2:-write}" ;;
-    Bash)       echo "$ ${2:-bash}" ;;
-    Grep|Glob)  echo "🔍 ${2:-search}" ;;
-    Agent)      echo "⚙ ${2:-agent}" ;;
-    *)          echo "🔧 ${1:-tool}" ;;
+    Read)       echo "${E_READ} ${2:-read}" ;;
+    Edit)       echo "${E_EDIT} ${2:-edit}" ;;
+    Write)      echo "${E_WRITE} ${2:-write}" ;;
+    Bash)       echo "${E_BASH} ${2:-bash}" ;;
+    Grep|Glob)  echo "${E_SEARCH} ${2:-search}" ;;
+    Agent)      echo "${E_AGENT} ${2:-agent}" ;;
+    *)          echo "${E_TOOL} ${1:-tool}" ;;
   esac
 }
 
 case "$EVENT" in
-  SessionStart)       TITLE="▶ Session Start" ;;
-  SessionEnd)         TITLE="💤 Session End" ;;
-  UserPromptSubmit)   TITLE="💬 Thinking..." ;;
-  Stop)               TITLE="✅ Done" ;;
-  StopFailure)        TITLE="❌ Failed" ;;
-  Notification)       TITLE="🔔 Notification" ;;
-  PermissionRequest)  TITLE="⏳ Permission?" ;;
+  SessionStart)       TITLE="$T_START" ;;
+  SessionEnd)         TITLE="$T_END" ;;
+  UserPromptSubmit)   TITLE="$T_PROMPT" ;;
+  Stop)               TITLE="$T_DONE" ;;
+  StopFailure)        TITLE="$T_FAILED" ;;
+  Notification)       TITLE="$T_NOTIF" ;;
+  PermissionRequest)  TITLE="$T_PERM" ;;
   PostToolUseFailure) TITLE="❌ ${TOOL:-tool} failed" ;;
-  PreCompact)         TITLE="🗜 Compacting..." ;;
-  PostCompact)        TITLE="✅ Compacted" ;;
-  SubagentStart)      TITLE="⚙ Subagent..." ;;
-  SubagentStop)       TITLE="⚙ Subagent done" ;;
+  PreCompact)         TITLE="$T_COMPACT" ;;
+  PostCompact)        TITLE="$T_COMPACTED" ;;
+  SubagentStart)      TITLE="$T_SUBAGENT" ;;
+  SubagentStop)       TITLE="$T_SUBAGENT_DONE" ;;
   PreToolUse)         TITLE="$(tool_label "$TOOL" "$CTX")" ;;
   PostToolUse)        TITLE="$(tool_label "$TOOL" "$CTX") ✓" ;;
-  Elicitation)        TITLE="❓ Elicitation" ;;
+  Elicitation)        TITLE="$T_ELICIT" ;;
   *)                  TITLE="Claude: $EVENT" ;;
 esac
 
+# ── Write title to terminal ────────────────────────────────────────────────────
 set_title() {
   local t="$1"
-  # Direct /dev/tty (sync hooks inherit a TTY)
   if printf '\033]0;%s\007' "$t" > /dev/tty 2>/dev/null; then
     dev=$(tty 2>/dev/null); [[ "$dev" == /dev/* ]] && echo "$dev" > "$TTY_CACHE"
     return
   fi
-  # Cached TTY device (async hooks don't inherit /dev/tty)
   if [ -f "$TTY_CACHE" ]; then
     cached=$(< "$TTY_CACHE")
     [[ "$cached" != /dev/* ]] && { rm -f "$TTY_CACHE"; cached=""; }
     [ -n "$cached" ] && printf '\033]0;%s\007' "$t" > "$cached" 2>/dev/null && return
   fi
-  # Walk up the process tree as last resort
   local pid=$PPID
   for _ in 1 2 3 4 5; do
     tty_name=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ')
@@ -104,7 +115,7 @@ set_title() {
 echo "$TITLE" > "$STATE_FILE"
 set_title "$TITLE"
 
-# Re-apply every second so the title survives terminal resets (tmux, zsh precmd, etc.)
+# Re-apply every second so the title survives terminal resets (tmux, zsh precmd…)
 (
   while [ "$(cat "$STATE_FILE" 2>/dev/null)" = "$TITLE" ]; do
     sleep 1

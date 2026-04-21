@@ -5,13 +5,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOKS_DIR="${HOME}/.claude/hooks"
 SETTINGS="${HOME}/.claude/settings.json"
 
-# Copy hook script
+B='\033[1m' D='\033[2m' R='\033[0m'
+CY='\033[36m' GR='\033[32m' YL='\033[33m'
+
+printf "\n${B}${CY}  claude-terminal-titles${R} — installer\n\n"
+
+# ── Choose mode ───────────────────────────────────────────────────────────────
+printf "  ${YL}[1]${R} Default  — install with standard emoji & labels\n"
+printf "  ${YL}[2]${R} Custom   — choose your own emoji and titles\n\n"
+printf "  Choice [1]: "
+read -r choice
+choice="${choice:-1}"
+
+# ── Copy hook script ──────────────────────────────────────────────────────────
 mkdir -p "$HOOKS_DIR"
 cp "$SCRIPT_DIR/session-title.sh" "$HOOKS_DIR/session-title.sh"
 chmod +x "$HOOKS_DIR/session-title.sh"
-echo "✓ Copied session-title.sh → $HOOKS_DIR/"
+printf "\n  ${GR}✓${R} Copied session-title.sh → %s/\n" "$HOOKS_DIR"
 
-# Register hook for every Claude Code event
+# ── Register hooks in settings.json ──────────────────────────────────────────
 python3 - <<PYEOF
 import json, os, sys
 
@@ -24,18 +36,16 @@ if os.path.exists(settings_path):
         try:
             settings = json.load(f)
         except json.JSONDecodeError:
-            print("✗ ~/.claude/settings.json is invalid JSON — fix it first", file=sys.stderr)
+            print("  ✗ ~/.claude/settings.json is invalid JSON — fix it first", file=sys.stderr)
             sys.exit(1)
 
 hooks = settings.setdefault("hooks", {})
-
 events = [
     "SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "StopFailure",
     "Notification", "PermissionRequest", "PostToolUseFailure",
     "PreCompact", "PostCompact", "SubagentStart", "SubagentStop",
     "PreToolUse", "PostToolUse", "Elicitation",
 ]
-
 added = 0
 for event in events:
     event_hooks = hooks.setdefault(event, [])
@@ -57,10 +67,17 @@ with open(settings_path, "w") as f:
     f.write("\n")
 
 if added:
-    print(f"✓ Registered {added} hook entries in {settings_path}")
+    print(f"  \033[32m✓\033[0m Registered {added} hook entries in {settings_path}")
 else:
-    print("✓ Hooks already registered — nothing changed")
+    print(f"  \033[2m✓ Hooks already registered — nothing changed\033[0m")
 PYEOF
 
-echo ""
-echo "✅ Done! Restart Claude Code to activate."
+# ── Custom config ─────────────────────────────────────────────────────────────
+if [[ "$choice" == "2" ]]; then
+  printf "\n  ${YL}Opening configurator...${R}\n\n"
+  sleep 0.5
+  bash "$SCRIPT_DIR/configure.sh"
+fi
+
+printf "\n  ${GR}${B}✅ Done!${R} Restart Claude Code to activate.\n"
+printf "  ${D}To reconfigure later: bash configure.sh${R}\n\n"
